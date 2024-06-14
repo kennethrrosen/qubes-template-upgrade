@@ -123,7 +123,6 @@ get_template_version() {
 next_debian_version() {
     local current_version=$1
     case $current_version in
-        buster) echo "bullseye" ;;
         bullseye) echo "bookworm" ;;
         bookworm) echo "trixie" ;;
         trixie) echo "fornextversion" ;;  # Update with the next version as necessary
