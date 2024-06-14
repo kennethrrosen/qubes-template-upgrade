@@ -7,7 +7,7 @@
 # Copyright (C) 2024 by Kenneth R. Rosen kennethrrosen@proton.me
 #
 # This program is free software; you can redistribute it and/or
-# modify it under the terms of the GNU General Public License
+# modify it under the terms of the GNU General Public License; 
 # as published by the Free Software Foundation; either version 2
 # of the License, or (at your option) any later version.
 #
@@ -20,6 +20,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
+set -o nounset -o errexit
 set -o noglob
 
 PREFIX="$(tput setaf 7)$(tput bold)"
@@ -125,6 +126,22 @@ message() {
     echo "${PREFIX}${1}${POSTFIX}"
 }
 
+handle_error() {
+    local exit_code=$?
+    echo "An error occurred. Exiting with code $exit_code."
+    exit $exit_code
+}
+
+trap 'handle_error' ERR
+
+get_template_type() {
+    qvm-features "$1" os-distribution || echo "unknown"
+}
+
+get_template_version() {
+    qvm-features "$1" os-version || qvm-run -p "$1" "cat /etc/os-release | grep VERSION_ID"
+}
+
 upgrade_debian_template() {
     local template=$1
     local clone=$2
@@ -145,33 +162,19 @@ upgrade_debian_template() {
     fi
 
     message "Upgrading $template from $old_name to $new_name..."
-    qvm-start "$template"
-    sleep 10
+    qvm-run --skip-if-running -u root "$template" "echo 'Running upgrade in $template'"
 
     message "Updating APT repositories..."
-    qvm-run -p "$template" "sudo sed -i 's/$old_name/$new_name/g' /etc/apt/sources.list"
-    qvm-run -p "$template" "sudo sed -i 's/$old_name/$new_name/g' /etc/apt/sources.list.d/qubes-r4.list"
+    qvm-run -u root "$template" "sed -i 's/$old_name/$new_name/g' /etc/apt/sources.list /etc/apt/sources.list.d/*.list"
 
     message "Performing upgrade..."
-    if ! qvm-run -p "$template" "sudo apt update && sudo apt full-upgrade -y"; then
-        message "APT upgrade failed on $template. Exiting."
-        exit 1
-    fi
-
-    if ! qvm-run -p "$template" "sudo apt autoremove -y && sudo apt clean"; then
-        message "APT cleanup failed on $template. Please check manually."
-    fi
+    qvm-run -u root "$template" "apt update && apt full-upgrade -y && apt autoremove -y && apt clean"
 
     message "Trimming the new template..."
-    if ! qvm-run -p "$template" "sudo fstrim -av"; then
-        message "Trimming failed on $template. Please check manually."
-    fi
+    qvm-run -u root "$template" "fstrim -av"
 
     message "Shutting down $template..."
-    if ! qvm-shutdown --wait "$template"; then
-        message "Failed to shutdown $template. Exiting."
-        exit 1
-    fi
+    qvm-shutdown --wait "$template"
 
     message "Upgrade to $new_name completed successfully for $template."
 }
@@ -186,57 +189,38 @@ upgrade_fedora_template() {
         exit 1
     fi
 
-    local current_version=$(qvm-run -p $template "cat /etc/fedora-release")
+    local current_version=$(get_template_version "$template")
     local current_num=$(echo $current_version | grep -oP '(\d+)')
     local new_num=$((current_num + 1))
     local new_release="fedora-$new_num"
 
     if [[ $clone == "y" ]]; then
         message "Cloning $template to $new_template_name..."
-        qvm-clone $template $new_template_name
-        template=$new_template_name
+        qvm-clone "$template" "$new_template_name"
+        template="$new_template_name"
     else
-        new_template_name=$template
+        new_template_name="$template"
     fi
 
-    message "Allocating additional space..."
-    truncate -s 5GB /var/tmp/template-upgrade-cache.img
-    local dev=$(sudo losetup -f --show /var/tmp/template-upgrade-cache.img)
+    message "Performing upgrade..."
+    qvm-run --skip-if-running -u root "$template" "dnf clean all && dnf --releasever=$new_num distro-sync --best --allowerasing -y && dnf update -y && dnf upgrade -y"
 
-    message "Attaching block to $new_template_name"
-    qvm-start $new_template_name
-    qvm-block attach $new_template_name dom0:${dev##*/}
-    qvm-run -p $new_template_name "sudo mkfs.ext4 /dev/xvdi"
-    qvm-run -p $new_template_name "sudo mount /dev/xvdi /mnt/removable"
+    message "Shutting down $template..."
+    qvm-shutdown --wait "$template"
 
-    message "Performing upgrade. Patience..."
-    if qvm-run -p $new_template_name "sudo dnf clean all && sudo dnf --releasever=$new_num distro-sync --best --allowerasing -y"; then
-        qvm-run -p $new_template_name "sudo dnf update -y && sudo dnf upgrade -y"
-        qvm-run -p $new_template_name "cat /etc/fedora-release"
-        qvm-shutdown $new_template_name
-        sleep 2
-        message "Removing temporary cache..."
-        sudo losetup -d $dev
-        rm -f /var/tmp/template-upgrade-cache.img
-        qvm-features $new_template_name template-name $new_template_name
-        sleep 2
-        message "Upgrade completed successfully!"
-    else
-        message "Upgrade failed. Check the template for issues."
-        exit 1
-    fi
+    message "Upgrade completed successfully for $template."
 }
 
 change_qvm_features() {
     local template=$1
     local new_template_name=$2
     local version_number=${new_template_name##*-}
-    
+
     qvm-features "$template" name "$new_template_name"
     qvm-features "$template" os-version "$version_number"
     qvm-features "$template" template-summary "Qubes template for $new_template_name"
     qvm-features "$template" template-description "Qubes template for $new_template_name"
-    qvm-run -u root --service "$new_template_name" qubes.PostInstall
+    qvm-run -u root "$template" qubes.PostInstall
 }
 
 if ! type qvm-ls >/dev/null 2>&1; then
@@ -244,15 +228,16 @@ if ! type qvm-ls >/dev/null 2>&1; then
     exit 1
 fi
 
+template_type=$(get_template_type "$template")
+
 if [[ "$template_type" == "debian" ]]; then
     upgrade_debian_template "$template" "$clone" "$old_name" "$new_name" "$new_template_name"
-    change_qvm_features "$new_template_name" "$new_template_name"
+    change_qvm_features "$template" "$new_template_name"
 elif [[ "$template_type" == "fedora" ]]; then
-    upgrade_fedora_template "$template" "$proceed" "$clone" "$new_template_name"
+    upgrade_fedora_template "$template" "$clone" "$new_template_name"
     change_qvm_features "$template" "$new_template_name"
 else
     echo "Error: Unsupported template type. Use 'debian' or 'fedora'." >&2
     usage
     exit 1
 fi
-
