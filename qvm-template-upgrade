@@ -186,16 +186,15 @@ upgrade_fedora_template() {
         exit 1
     fi
 
-    local current_version=$(qvm-run -p "$template" "cat /etc/fedora-release")
-    local current_num=$(echo "$current_version" | grep -oP '(\d+)')
-
+    local current_version=$(qvm-run -p $template "cat /etc/fedora-release")
+    local current_num=$(echo $current_version | grep -oP '(\d+)')
     local new_num=$((current_num + 1))
     local new_release="fedora-$new_num"
 
-    if [[ "$clone" == "y" ]]; then
+    if [[ $clone == "y" ]]; then
         message "Cloning $template to $new_template_name..."
-        qvm-clone "$template" "$new_template_name"
-        template="$new_template_name"
+        qvm-clone $template $new_template_name
+        template=$new_template_name
     else
         new_template_name=$template
     fi
@@ -205,21 +204,21 @@ upgrade_fedora_template() {
     local dev=$(sudo losetup -f --show /var/tmp/template-upgrade-cache.img)
 
     message "Attaching block to $new_template_name"
-    qvm-start "$new_template_name"
-    qvm-block attach "$new_template_name" dom0:"${dev##*/}"
-    qvm-run -p "$new_template_name" -u root "mkfs.ext4 /dev/xvdi"
-    qvm-run -p "$new_template_name" -u root "mount /dev/xvdi /mnt/removable"
+    qvm-start $new_template_name
+    qvm-block attach $new_template_name dom0:${dev##*/}
+    qvm-run -p $new_template_name "sudo mkfs.ext4 /dev/xvdi"
+    qvm-run -p $new_template_name "sudo mount /dev/xvdi /mnt/removable"
 
     message "Performing upgrade. Patience..."
-    if qvm-run -p "$new_template_name" -u root "dnf clean all && dnf --releasever=$new_num distro-sync --best --allowerasing -y"; then
-        qvm-run -p "$new_template_name" -u root "dnf update -y && dnf upgrade -y"
-        qvm-run -p "$new_template_name" "cat /etc/fedora-release"
-        qvm-shutdown "$new_template_name"
+    if qvm-run -p $new_template_name "sudo dnf clean all && sudo dnf --releasever=$new_num distro-sync --best --allowerasing -y"; then
+        qvm-run -p $new_template_name "sudo dnf update -y && sudo dnf upgrade -y"
+        qvm-run -p $new_template_name "cat /etc/fedora-release"
+        qvm-shutdown $new_template_name
         sleep 2
         message "Removing temporary cache..."
-        sudo losetup -d "$dev"
+        sudo losetup -d $dev
         rm -f /var/tmp/template-upgrade-cache.img
-        qvm-features "$new_template_name" template-name "$new_template_name"
+        qvm-features $new_template_name template-name $new_template_name
         sleep 2
         message "Upgrade completed successfully!"
     else
