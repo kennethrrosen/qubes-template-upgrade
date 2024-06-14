@@ -43,45 +43,25 @@ Options:
   -n, --new-name     New Debian release name (e.g., 'bookworm'). Required if upgrading Debian.
   -N, --new-template New template name. Required if cloning.
 
+Debian Notes: Debian 10 is "buster", Debian 11 is "bullseye", Debian 12 is "bookworm", Debian 13 is "trixie"
+
 Examples:
-  ${0##*/} debian debian-10 --old-name=buster --new-name=bullseye
-  ${0##*/} fedora fedora-33
+  1. Upgrade a Debian template from 'bullseye' to 'bookworm' and clone it to a new template:
+     ${0##*/} debian debian-11 --clone --old-name=bullseye --new-name=bookworm --new-template=debian-12
+
+  2. Upgrade a Fedora template to the next release and clone it to a new template:
+     ${0##*/} fedora fedora-33 --clone --new-template=fedora-34
 
 EOF
 }
 
-while getopts ":hco:n:N:" opt; do
-    case ${opt} in
-        h )
-            usage
-            exit 0
-            ;;
-        c )
-            clone="y"
-            ;;
-        o )
-            old_name="${OPTARG}"
-            ;;
-        n )
-            new_name="${OPTARG}"
-            ;;
-        N )
-            new_template_name="${OPTARG}"
-            ;;
-        \? )
-            echo "Invalid Option: -$OPTARG" 1>&2
-            usage
-            exit 1
-            ;;
-        : )
-            echo "Invalid Option: -$OPTARG requires an argument" 1>&2
-            usage
-            exit 1
-            ;;
-    esac
-done
-shift $((OPTIND -1))
+# Initialize variables for options
+clone=""
+old_name=""
+new_name=""
+new_template_name=""
 
+# Check for required positional arguments
 if [ $# -lt 2 ]; then
     echo "Error: TYPE and TEMPLATE are required." >&2
     usage
@@ -91,6 +71,52 @@ fi
 template_type=$1
 template=$2
 shift 2
+
+# Use getopt for robust argument parsing
+OPTS=$(getopt -o hco:n:N: --long help,clone,old-name:,new-name:,new-template: -n 'parse-options' -- "$@")
+if [ $? != 0 ]; then
+    usage
+    exit 1
+fi
+eval set -- "$OPTS"
+
+# Process options
+while true; do
+    case "$1" in
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        -c|--clone)
+            clone="y"
+            shift
+            ;;
+        -o|--old-name)
+            old_name="$2"
+            shift 2
+            ;;
+        -n|--new-name)
+            new_name="$2"
+            shift 2
+            ;;
+        -N|--new-template)
+            new_template_name="$2"
+            shift 2
+            ;;
+        --)
+            shift
+            break
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            usage
+            exit 1
+            ;;
+    esac
+done
+
+echo "clone: $clone, old_name: $old_name, new_name: $new_name, new_template_name: $new_template_name" # Debug statement
+echo "template_type: $template_type, template: $template" # Debug statement
 
 if [[ "$template_type" == "debian" && ( -z "$old_name" || -z "$new_name" ) ]]; then
     echo "Error: --old-name and --new-name are required for Debian upgrades." >&2
@@ -108,7 +134,7 @@ upgrade_debian_template() {
     local old_name=$3
     local new_name=$4
     local new_template_name=$5
-    
+
     if [[ "$clone" == "y" && -z "$new_template_name" ]]; then
         message "Error: New template name required when cloning."
         exit 1
@@ -239,3 +265,4 @@ else
     usage
     exit 1
 fi
+
