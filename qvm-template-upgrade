@@ -115,9 +115,6 @@ while true; do
     esac
 done
 
-echo "clone: $clone, old_name: $old_name, new_name: $new_name, new_template_name: $new_template_name" # Debug statement
-echo "template_type: $template_type, template: $template" # Debug statement
-
 if [[ "$template_type" == "debian" && ( -z "$old_name" || -z "$new_name" ) ]]; then
     echo "Error: --old-name and --new-name are required for Debian upgrades." >&2
     usage
@@ -181,28 +178,24 @@ upgrade_debian_template() {
 
 upgrade_fedora_template() {
     local template=$1
-    local proceed=$2
-    local clone=$3
-    local new_template_name=$4
+    local clone=$2
+    local new_template_name=$3
 
     if ! qvm-ls | grep -qw "$template"; then
         message "Template $template does not exist."
         exit 1
     fi
 
-    local current_version=$(qvm-run -p $template "cat /etc/fedora-release")
+    local current_version=$(qvm-run -p "$template" "cat /etc/fedora-release")
     local current_num=$(echo "$current_version" | grep -oP '(\d+)')
-
-    if [[ $proceed != "y" ]]; then
-        message "Skipping $template without changes."
-        return 0
-    fi
 
     local new_num=$((current_num + 1))
     local new_release="fedora-$new_num"
 
-    if [[ $clone == "y" ]]; then
+    if [[ "$clone" == "y" ]]; then
+        message "Cloning $template to $new_template_name..."
         qvm-clone "$template" "$new_template_name"
+        template="$new_template_name"
     else
         new_template_name=$template
     fi
@@ -256,8 +249,6 @@ if [[ "$template_type" == "debian" ]]; then
     upgrade_debian_template "$template" "$clone" "$old_name" "$new_name" "$new_template_name"
     change_qvm_features "$new_template_name" "$new_template_name"
 elif [[ "$template_type" == "fedora" ]]; then
-    prompt_user
-    new_template_name=$(get_new_template_name "$template")
     upgrade_fedora_template "$template" "$proceed" "$clone" "$new_template_name"
     change_qvm_features "$template" "$new_template_name"
 else
