@@ -130,10 +130,10 @@ get_template_type() {
 get_template_version() {
     local template=$1
     local version
-    version=$(qvm-features "$template" os-version 2>/dev/null || 
-              qvm-run -p "$template" "grep -oP '\d+' /etc/fedora-release" 2>/dev/null ||
-              qvm-run -p "$template" "grep ^VERSION_CODENAME= /etc/os-release | cut -d'=' -f2" 2>/dev/null ||
-              qvm-run -p "$template" "cat /etc/debian_version") || {
+    version=$(qvm-features "$template" os-version 2>/dev/null) ||
+    version=$(qvm-run -p "$template" "grep -oP '\d+' /etc/fedora-release" 2>/dev/null) ||
+    version=$(qvm-run -p "$template" "grep ^VERSION_CODENAME= /etc/os-release | cut -d'=' -f2" 2>/dev/null) ||
+    version=$(qvm-run -p "$template" "cat /etc/debian_version" 2>/dev/null) || {
         echo "unknown"
         exit 1
     }
