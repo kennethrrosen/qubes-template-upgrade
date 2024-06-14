@@ -196,8 +196,7 @@ upgrade_debian_template() {
     qvm-run -u root "$template" "sed -i 's/$old_name/$new_name/g' /etc/apt/sources.list /etc/apt/sources.list.d/*.list"
 
     message "Performing upgrade..."
-    qvm-run -u root "$template" "apt update && apt full-upgrade -y && apt autoremove -y && apt clean" &
-    spinner $!
+    qvm-run -u root "$template" "DEBIAN_FRONTEND=noninteractive apt update && DEBIAN_FRONTEND=noninteractive apt full-upgrade -y && apt autoremove -y && apt clean"
 
     message "Trimming the new template..."
     qvm-run -u root "$template" "fstrim -av"
@@ -207,6 +206,7 @@ upgrade_debian_template() {
 
     message "Upgrade to $new_name completed successfully for $template."
 }
+
 
 upgrade_fedora_template() {
     local template=$1
@@ -234,16 +234,14 @@ upgrade_fedora_template() {
     qvm-start --skip-if-running "$template"
 
     message "Starting upgrade in $template..."
-    qvm-run -u root "$template" "dnf clean all && dnf --releasever=$new_num distro-sync --best --allowerasing -y" &
-    spinner $!
-    qvm-run -u root "$template" "dnf update -y && dnf upgrade -y" &
-    spinner $!
+    qvm-run -u root "$template" "dnf clean all && dnf --releasever=$new_num distro-sync --best --allowerasing -y --verbose"
 
     message "Shutting down $template..."
     qvm-shutdown --wait "$template"
 
     message "Upgrade completed successfully for $template."
 }
+
 
 message "Determining template type and version..."
 template_type=$(get_template_type "$template")
