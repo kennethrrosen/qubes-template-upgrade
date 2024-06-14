@@ -113,18 +113,19 @@ handle_error() {
 
 trap 'handle_error' ERR
 
-spinner() {
-    local pid=$1
-    local delay=0.1
-    local spinstr='|/-\'
-    while [ "$(ps a | awk '{print $1}' | grep "$pid")" ]; do
-        local temp=${spinstr#?}
-        printf " [%c]  " "$spinstr"
-        local spinstr=$temp${spinstr%"$temp"}
-        sleep $delay
-        printf "\b\b\b\b\b\b"
+progress_bar() {
+    local duration=$1
+    local interval=1
+    local total_ticks=50
+    local completed_ticks=0
+
+    echo -n "["
+    while [ $completed_ticks -lt $total_ticks ]; do
+        echo -n "="
+        completed_ticks=$((completed_ticks + 1))
+        sleep $interval
     done
-    printf "    \b\b\b\b"
+    echo "] 100%"
 }
 
 get_template_type() {
@@ -168,7 +169,6 @@ next_debian_version() {
         *) echo "unknown" ;;
     esac
 }
-
 upgrade_debian_template() {
     local template=$1
     local clone=$2
@@ -196,7 +196,10 @@ upgrade_debian_template() {
     qvm-run -u root "$template" "sed -i 's/$old_name/$new_name/g' /etc/apt/sources.list /etc/apt/sources.list.d/*.list"
 
     message "Performing upgrade..."
-    qvm-run -u root "$template" "DEBIAN_FRONTEND=noninteractive apt update && DEBIAN_FRONTEND=noninteractive apt full-upgrade -y && apt autoremove -y && apt clean"
+    (qvm-run -u root "$template" "DEBIAN_FRONTEND=noninteractive apt update && DEBIAN_FRONTEND=noninteractive apt full-upgrade -y && apt autoremove -y && apt clean") &
+    pid=$!
+    progress_bar 60 &  # Assume it takes around 60 seconds, adjust as needed
+    wait $pid
 
     message "Trimming the new template..."
     qvm-run -u root "$template" "fstrim -av"
@@ -206,7 +209,6 @@ upgrade_debian_template() {
 
     message "Upgrade to $new_name completed successfully for $template."
 }
-
 
 upgrade_fedora_template() {
     local template=$1
@@ -234,14 +236,16 @@ upgrade_fedora_template() {
     qvm-start --skip-if-running "$template"
 
     message "Starting upgrade in $template..."
-    qvm-run -u root "$template" "dnf clean all && dnf --releasever=$new_num distro-sync --best --allowerasing -y --verbose"
+    (qvm-run -u root "$template" "dnf clean all && dnf --releasever=$new_num distro-sync --best --allowerasing -y --verbose") &
+    pid=$!
+    progress_bar 60 &  # Assume it takes around 60 seconds, adjust as needed
+    wait $pid
 
     message "Shutting down $template..."
     qvm-shutdown --wait "$template"
 
     message "Upgrade completed successfully for $template."
 }
-
 
 message "Determining template type and version..."
 template_type=$(get_template_type "$template")
