@@ -176,10 +176,11 @@ upgrade_debian_template() {
     local old_name=$4
     local new_name=$5
 
-    if [[ "$clone" == "y" && -z "$new_template_name" ]]; then
-        message "Error: New template name required when cloning."
-        exit 1
-    elif [[ "$clone" == "y" ]]; then
+    if [[ "$clone" == "y" ]]; then
+        if qvm-ls | grep -qw "$new_template_name"; then
+            message "Error: VM $new_template_name already exists. Exiting."
+            exit 1
+        fi
         message "Cloning $template to $new_template_name..."
         if ! qvm-clone "$template" "$new_template_name"; then
             message "Failed to clone template. Exiting."
@@ -215,8 +216,15 @@ upgrade_fedora_template() {
     local new_num=$((current_num + 1))
 
     if [[ $clone == "y" ]]; then
+        if qvm-ls | grep -qw "$new_template_name"; then
+            message "Error: VM $new_template_name already exists. Exiting."
+            exit 1
+        fi
         message "Cloning $template to $new_template_name..."
-        qvm-clone "$template" "$new_template_name"
+        if ! qvm-clone "$template" "$new_template_name"; then
+            message "Failed to clone template. Exiting."
+            exit 1
+        fi
         template="$new_template_name"
     else
         new_template_name="$template"
@@ -226,9 +234,9 @@ upgrade_fedora_template() {
     qvm-start --skip-if-running "$template"
 
     message "Starting upgrade in $template..."
-    qvm-run -p "$template" "dnf clean all && dnf --releasever=$new_num distro-sync --best --allowerasing -y" &
+    qvm-run -u root "$template" "dnf clean all && dnf --releasever=$new_num distro-sync --best --allowerasing -y" &
     spinner $!
-    qvm-run -p "$template" "dnf update -y && dnf upgrade -y" &
+    qvm-run -u root "$template" "dnf update -y && dnf upgrade -y" &
     spinner $!
 
     message "Shutting down $template..."
@@ -236,7 +244,6 @@ upgrade_fedora_template() {
 
     message "Upgrade completed successfully for $template."
 }
-
 
 message "Determining template type and version..."
 template_type=$(get_template_type "$template")
