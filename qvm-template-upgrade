@@ -42,11 +42,10 @@ Options:
   -N, --new-template New template name. Required if cloning.
 
 Examples:
-  1. Upgrade a Debian template and clone it to a new template:
-     ${0##*/} debian-11 --clone --new-template=debian-12
-
-  2. Upgrade a Fedora template and clone it to a new template:
-     ${0##*/} fedora-33 --clone --new-template=fedora-34
+  1. Upgrade a template or StandaloneVM 
+     ${0##*/} TEMPLATE
+  2. Upgrade a template or StandaloneVM, keeping original and cloning into a new template or StandaloneVM which will be upgraded:
+     ${0##*/} TEMPLATE --clone --new-template=TEMPLATENEW
 
 EOF
 }
