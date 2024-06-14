@@ -1,0 +1,241 @@
+#!/bin/bash
+#
+# Qubes OS Template Upgrade Script
+# Supports Fedora and Debian Templates
+# https://www.kennethrrosen.cloud
+#
+# Copyright (C) 2024 by Kenneth R. Rosen kennethrrosen@proton.me
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+set -o noglob
+
+PREFIX="$(tput setaf 7)$(tput bold)"
+YELLOW="$(tput setaf 3)$(tput bold)"
+POSTFIX="$(tput sgr0)"
+
+usage() {
+    cat >&2 <<EOF
+Usage: ${0##*/} TYPE TEMPLATE [OPTIONS]...
+
+A script for upgrading templates in Qubes OS.
+
+Arguments:
+  TYPE               Type of the template (debian or fedora). Required.
+  TEMPLATE           Name of the template to upgrade. Required.
+
+Options:
+  -h, --help         Display this help and exit.
+  -c, --clone        Clone the template before upgrading. Optional.
+  -o, --old-name     Old Debian release name (e.g., 'bullseye'). Required if upgrading Debian.
+  -n, --new-name     New Debian release name (e.g., 'bookworm'). Required if upgrading Debian.
+  -N, --new-template New template name. Required if cloning.
+
+Examples:
+  ${0##*/} debian debian-10 --old-name=buster --new-name=bullseye
+  ${0##*/} fedora fedora-33
+
+EOF
+}
+
+while getopts ":hco:n:N:" opt; do
+    case ${opt} in
+        h )
+            usage
+            exit 0
+            ;;
+        c )
+            clone="y"
+            ;;
+        o )
+            old_name="${OPTARG}"
+            ;;
+        n )
+            new_name="${OPTARG}"
+            ;;
+        N )
+            new_template_name="${OPTARG}"
+            ;;
+        \? )
+            echo "Invalid Option: -$OPTARG" 1>&2
+            usage
+            exit 1
+            ;;
+        : )
+            echo "Invalid Option: -$OPTARG requires an argument" 1>&2
+            usage
+            exit 1
+            ;;
+    esac
+done
+shift $((OPTIND -1))
+
+if [ $# -lt 2 ]; then
+    echo "Error: TYPE and TEMPLATE are required." >&2
+    usage
+    exit 1
+fi
+
+template_type=$1
+template=$2
+shift 2
+
+if [[ "$template_type" == "debian" && ( -z "$old_name" || -z "$new_name" ) ]]; then
+    echo "Error: --old-name and --new-name are required for Debian upgrades." >&2
+    usage
+    exit 1
+fi
+
+message() {
+    echo "${PREFIX}${1}${POSTFIX}"
+}
+
+upgrade_debian_template() {
+    local template=$1
+    local clone=$2
+    local old_name=$3
+    local new_name=$4
+    local new_template_name=$5
+    
+    if [[ "$clone" == "y" && -z "$new_template_name" ]]; then
+        message "Error: New template name required when cloning."
+        exit 1
+    elif [[ "$clone" == "y" ]]; then
+        message "Cloning $template to $new_template_name..."
+        if ! qvm-clone "$template" "$new_template_name"; then
+            message "Failed to clone template. Exiting."
+            exit 1
+        fi
+        template="$new_template_name"
+    fi
+
+    message "Upgrading $template from $old_name to $new_name..."
+    qvm-start "$template"
+    sleep 10
+
+    message "Updating APT repositories..."
+    qvm-run -p "$template" "sudo sed -i 's/$old_name/$new_name/g' /etc/apt/sources.list"
+    qvm-run -p "$template" "sudo sed -i 's/$old_name/$new_name/g' /etc/apt/sources.list.d/qubes-r4.list"
+
+    message "Performing upgrade..."
+    if ! qvm-run -p "$template" "sudo apt update && sudo apt full-upgrade -y"; then
+        message "APT upgrade failed on $template. Exiting."
+        exit 1
+    fi
+
+    if ! qvm-run -p "$template" "sudo apt autoremove -y && sudo apt clean"; then
+        message "APT cleanup failed on $template. Please check manually."
+    fi
+
+    message "Trimming the new template..."
+    if ! qvm-run -p "$template" "sudo fstrim -av"; then
+        message "Trimming failed on $template. Please check manually."
+    fi
+
+    message "Shutting down $template..."
+    if ! qvm-shutdown --wait "$template"; then
+        message "Failed to shutdown $template. Exiting."
+        exit 1
+    fi
+
+    message "Upgrade to $new_name completed successfully for $template."
+}
+
+upgrade_fedora_template() {
+    local template=$1
+    local proceed=$2
+    local clone=$3
+    local new_template_name=$4
+
+    if ! qvm-ls | grep -qw "$template"; then
+        message "Template $template does not exist."
+        exit 1
+    fi
+
+    local current_version=$(qvm-run -p $template "cat /etc/fedora-release")
+    local current_num=$(echo "$current_version" | grep -oP '(\d+)')
+
+    if [[ $proceed != "y" ]]; then
+        message "Skipping $template without changes."
+        return 0
+    fi
+
+    local new_num=$((current_num + 1))
+    local new_release="fedora-$new_num"
+
+    if [[ $clone == "y" ]]; then
+        qvm-clone "$template" "$new_template_name"
+    else
+        new_template_name=$template
+    fi
+
+    message "Allocating additional space..."
+    truncate -s 5GB /var/tmp/template-upgrade-cache.img
+    local dev=$(sudo losetup -f --show /var/tmp/template-upgrade-cache.img)
+
+    message "Attaching block to $new_template_name"
+    qvm-start "$new_template_name"
+    qvm-block attach "$new_template_name" dom0:"${dev##*/}"
+    qvm-run -p "$new_template_name" -u root "mkfs.ext4 /dev/xvdi"
+    qvm-run -p "$new_template_name" -u root "mount /dev/xvdi /mnt/removable"
+
+    message "Performing upgrade. Patience..."
+    if qvm-run -p "$new_template_name" -u root "dnf clean all && dnf --releasever=$new_num distro-sync --best --allowerasing -y"; then
+        qvm-run -p "$new_template_name" -u root "dnf update -y && dnf upgrade -y"
+        qvm-run -p "$new_template_name" "cat /etc/fedora-release"
+        qvm-shutdown "$new_template_name"
+        sleep 2
+        message "Removing temporary cache..."
+        sudo losetup -d "$dev"
+        rm -f /var/tmp/template-upgrade-cache.img
+        qvm-features "$new_template_name" template-name "$new_template_name"
+        sleep 2
+        message "Upgrade completed successfully!"
+    else
+        message "Upgrade failed. Check the template for issues."
+        exit 1
+    fi
+}
+
+change_qvm_features() {
+    local template=$1
+    local new_template_name=$2
+    local version_number=${new_template_name##*-}
+    
+    qvm-features "$template" name "$new_template_name"
+    qvm-features "$template" os-version "$version_number"
+    qvm-features "$template" template-summary "Qubes template for $new_template_name"
+    qvm-features "$template" template-description "Qubes template for $new_template_name"
+    qvm-run -u root --service "$new_template_name" qubes.PostInstall
+}
+
+if ! type qvm-ls >/dev/null 2>&1; then
+    echo "This script is intended to run in a Qubes OS environment." >&2
+    exit 1
+fi
+
+if [[ "$template_type" == "debian" ]]; then
+    upgrade_debian_template "$template" "$clone" "$old_name" "$new_name" "$new_template_name"
+    change_qvm_features "$new_template_name" "$new_template_name"
+elif [[ "$template_type" == "fedora" ]]; then
+    prompt_user
+    new_template_name=$(get_new_template_name "$template")
+    upgrade_fedora_template "$template" "$proceed" "$clone" "$new_template_name"
+    change_qvm_features "$template" "$new_template_name"
+else
+    echo "Error: Unsupported template type. Use 'debian' or 'fedora'." >&2
+    usage
+    exit 1
+fi
