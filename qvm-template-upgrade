@@ -181,7 +181,7 @@ upgrade_debian_template() {
     qvm-run -u root "$template" "sed -i 's/$old_name/$new_name/g' /etc/apt/sources.list /etc/apt/sources.list.d/*.list"
 
     message "Performing upgrade..."
-    qvm-run -u root "$template" "apt update && apt full-upgrade -y && apt autoremove -y && apt clean"
+    qvm-run -p -u root "$template" "apt update && apt full-upgrade -y && apt autoremove -y && apt clean"
 
     message "Trimming the new template..."
     qvm-run -u root "$template" "fstrim -av"
@@ -209,7 +209,7 @@ upgrade_fedora_template() {
 
     message "Performing upgrade..."
     qvm-start --skip-if-running "$template"
-    qvm-run -u root "$template" "dnf clean all && dnf --releasever=$new_num distro-sync --best --allowerasing -y && dnf update -y && dnf upgrade -y"
+    qvm-run -p -u root "$template" "dnf clean all && dnf --releasever=$new_num distro-sync --best --allowerasing -y && dnf update -y && dnf upgrade -y"
 
     message "Shutting down $template..."
     qvm-shutdown --wait "$template"
