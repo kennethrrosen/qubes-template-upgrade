@@ -113,19 +113,67 @@ handle_error() {
 
 trap 'handle_error' ERR
 
+# Progress bar function
 progress_bar() {
-    local duration=$1
-    local interval=1
-    local total_ticks=50
-    local completed_ticks=0
+    local total=$1
+    local current=$2
+    local width=50
+    local progress=$((width * current / total))
+    printf "["
+    for ((i = 0; i < progress; i++)); do printf "="; done
+    for ((i = progress; i < width; i++)); do printf " "; done
+    printf "] %d%%\r" $((100 * current / total))
+}
 
-    echo -n "["
-    while [ $completed_ticks -lt $total_ticks ]; do
-        echo -n "="
-        completed_ticks=$((completed_ticks + 1))
-        sleep $interval
-    done
-    echo "] 100%"
+# Function to monitor and display progress for apt upgrade
+apt_upgrade_with_progress() {
+    local template=$1
+    qvm-run -u root "$template" "DEBIAN_FRONTEND=noninteractive apt update"
+    local total_steps=3
+    local current_step=0
+    current_step=$((current_step + 1))
+    progress_bar $total_steps $current_step
+    sleep 1
+
+    qvm-run -u root "$template" "DEBIAN_FRONTEND=noninteractive apt full-upgrade -y" | (
+        while read -r line; do
+            if [[ "$line" =~ ([0-9]+)% ]]; then
+                percentage=${BASH_REMATCH[1]}
+                progress_bar 100 $percentage
+            fi
+        done
+    )
+    current_step=$((current_step + 1))
+    progress_bar $total_steps $current_step
+    sleep 1
+
+    qvm-run -u root "$template" "apt autoremove -y && apt clean"
+    current_step=$((current_step + 1))
+    progress_bar $total_steps $current_step
+    echo ""
+}
+
+# Function to monitor and display progress for dnf upgrade
+dnf_upgrade_with_progress() {
+    local template=$1
+    qvm-run -u root "$template" "dnf clean all"
+    local total_steps=2
+    local current_step=0
+    current_step=$((current_step + 1))
+    progress_bar $total_steps $current_step
+    sleep 1
+
+    qvm-run -u root "$template" "dnf --refresh upgrade -y" | (
+        while read -r line; do
+            if [[ "$line" =~ ([0-9]+)% ]]; then
+                percentage=${BASH_REMATCH[1]}
+                progress_bar 100 $percentage
+            fi
+        done
+    )
+    current_step=$((current_step + 1))
+    progress_bar $total_steps $current_step
+    echo ""
 }
 
 get_template_type() {
@@ -169,6 +217,7 @@ next_debian_version() {
         *) echo "unknown" ;;
     esac
 }
+
 upgrade_debian_template() {
     local template=$1
     local clone=$2
@@ -196,10 +245,7 @@ upgrade_debian_template() {
     qvm-run -u root "$template" "sed -i 's/$old_name/$new_name/g' /etc/apt/sources.list /etc/apt/sources.list.d/*.list"
 
     message "Performing upgrade..."
-    (qvm-run -u root "$template" "DEBIAN_FRONTEND=noninteractive apt update && DEBIAN_FRONTEND=noninteractive apt full-upgrade -y && apt autoremove -y && apt clean") &
-    pid=$!
-    progress_bar 60 &  # Assume it takes around 60 seconds, adjust as needed
-    wait $pid
+    apt_upgrade_with_progress "$template"
 
     message "Trimming the new template..."
     qvm-run -u root "$template" "fstrim -av"
@@ -236,10 +282,7 @@ upgrade_fedora_template() {
     qvm-start --skip-if-running "$template"
 
     message "Starting upgrade in $template..."
-    (qvm-run -u root "$template" "dnf clean all && dnf --releasever=$new_num distro-sync --best --allowerasing -y --verbose") &
-    pid=$!
-    progress_bar 60 &  # Assume it takes around 60 seconds, adjust as needed
-    wait $pid
+    dnf_upgrade_with_progress "$template"
 
     message "Shutting down $template..."
     qvm-shutdown --wait "$template"
