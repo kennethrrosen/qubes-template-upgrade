@@ -140,7 +140,7 @@ get_template_version() {
     if [[ -z "$version" || "$version" == "unknown" ]]; then
         echo "Error: Could not determine template version for $template. It might be EOL." >&2
         exit 1
-    }
+    fi
     echo "$version"
 }
 
