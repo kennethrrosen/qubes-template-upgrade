@@ -113,6 +113,20 @@ handle_error() {
 
 trap 'handle_error' ERR
 
+spinner() {
+    local pid=$1
+    local delay=0.1
+    local spinstr='|/-\'
+    while [ "$(ps a | awk '{print $1}' | grep "$pid")" ]; do
+        local temp=${spinstr#?}
+        printf " [%c]  " "$spinstr"
+        local spinstr=$temp${spinstr%"$temp"}
+        sleep $delay
+        printf "\b\b\b\b\b\b"
+    done
+    printf "    \b\b\b\b"
+}
+
 get_template_type() {
     local template=$1
     local type
@@ -180,8 +194,9 @@ upgrade_debian_template() {
     message "Updating APT repositories..."
     qvm-run -u root "$template" "sed -i 's/$old_name/$new_name/g' /etc/apt/sources.list /etc/apt/sources.list.d/*.list"
 
-    message "Performing upgrade. Patience..."
-    qvm-run -u root "$template" "apt update && apt full-upgrade -y && apt autoremove -y && apt clean"
+    message "Performing upgrade..."
+    qvm-run -u root "$template" "apt update && apt full-upgrade -y && apt autoremove -y && apt clean" &
+    spinner $!
 
     message "Trimming the new template..."
     qvm-run -u root "$template" "fstrim -av"
@@ -207,9 +222,14 @@ upgrade_fedora_template() {
         new_template_name="$template"
     fi
 
-    message "Performing upgrade. Patience..."
+    message "Performing upgrade..."
     qvm-start --skip-if-running "$template"
-    qvm-run -u root "$template" "dnf clean all && dnf --releasever=$new_num distro-sync --best --allowerasing -y && dnf update -y && dnf upgrade -y"
+
+    message "Starting upgrade in $template..."
+    qvm-run -p "$template" "dnf clean all && dnf --releasever=$new_num distro-sync --best --allowerasing -y" &
+    spinner $!
+    qvm-run -p "$template" "dnf update -y && dnf upgrade -y" &
+    spinner $!
 
     message "Shutting down $template..."
     qvm-shutdown --wait "$template"
@@ -217,14 +237,6 @@ upgrade_fedora_template() {
     message "Upgrade completed successfully for $template."
 }
 
-change_qvm_features() {
-    qvm-run -u root "$template" qubes.PostInstall
-}
-
-if ! type qvm-ls >/dev/null 2>&1; then
-    echo "This script is intended to run in a Qubes OS environment." >&2
-    exit 1
-fi
 
 message "Determining template type and version..."
 template_type=$(get_template_type "$template")
