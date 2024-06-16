@@ -215,6 +215,9 @@ upgrade_fedora_template() {
     local new_template_name=$3
     local current_num=$4
     local new_num=$((current_num + 1))
+    local max_retries=3
+    local retry_count=0
+    local success=false
 
     if [[ $clone == "y" ]]; then
         message "Cloning $template to $new_template_name..."
@@ -226,7 +229,21 @@ upgrade_fedora_template() {
 
     message "Upgrading Fedora $current_num to Fedora $new_num. Patience..."
     qvm-start --skip-if-running "$template"
-    qvm-run -p -u root "$template" "dnf clean all && dnf --releasever=$new_num distro-sync --best --allowerasing -y && dnf update -y && dnf upgrade -y"
+    
+    while [ $retry_count -lt $max_retries ]; do
+        if qvm-run -u root "$template" "dnf clean all && dnf --releasever=$new_num distro-sync --best --allowerasing -y && dnf update -y && dnf upgrade -y"; then
+            success=true
+            break
+        else
+            retry_count=$((retry_count + 1))
+            message "Attempt $retry_count failed. Retrying..."
+        fi
+    done
+
+    if [ "$success" = false ]; then
+        message "Upgrade failed after $max_retries attempts. Exiting."
+        exit 1
+    fi
 
     message "Shutting down $template..."
     change_qvm_features "$template"
