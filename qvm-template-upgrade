@@ -199,8 +199,8 @@ upgrade_debian_template() {
         exit 1
     fi
 
-    message "Trimming the new template..."
-    qvm-run -u root "$template" "fstrim -av"
+#    message "Trimming the new template..."
+#    qvm-run -u root "$template" "fstrim -av"
 
     message "Shutting down $template..."
     change_qvm_features "$template"
