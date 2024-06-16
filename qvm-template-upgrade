@@ -29,7 +29,7 @@ POSTFIX="$(tput sgr0)"
 
 usage() {
     cat >&2 <<EOF
-Usage: ${0##*/} TEMPLATE [OPTIONS]...
+Usage: ${0##*/} TEMPLATE [OPTIONS]... [TEMPLATE [OPTIONS]...] ...
 
 A script for upgrading templates in Qubes OS.
 
@@ -42,62 +42,58 @@ Options:
   -N, --new-template New template name. Required if cloning.
 
 Examples:
-  1. Upgrade a template or StandaloneVM 
-     ${0##*/} TEMPLATE
+  1. Upgrade multiple templates
+     ${0##*/} TEMPLATE1 TEMPLATE2
 
-  2. Upgrade a template or StandaloneVM, keeping original and cloning into a new template or StandaloneVM which will be upgraded:
-     ${0##*/} TEMPLATE --clone --new-template=TEMPLATENEW
+  2. Upgrade multiple templates, some with cloning:
+     ${0##*/} TEMPLATE1 --clone --new-template=TEMPLATE1CLONE TEMPLATE2 TEMPLATE3 --clone --new-template=TEMPLATE3CLONE
 
 EOF
 }
 
 # Initialize variables for options
-clone=""
-new_template_name=""
+declare -A templates
+declare -A clones
+declare -A new_template_names
 
 # Check for required positional arguments
 if [ $# -lt 1 ]; then
-    echo "Error: TEMPLATE is required." >&2
+    echo "Error: At least one TEMPLATE is required." >&2
     usage
     exit 1
 fi
 
-template=$1
-shift
+while [ $# -gt 0 ]; do
+    template=$1
+    shift
+    clone=""
+    new_template_name=""
 
-# Use getopt for robust argument parsing
-OPTS=$(getopt -o hcN: --long help,clone,new-template: -n 'parse-options' -- "$@")
-if [ $? != 0 ]; then
-    usage
-    exit 1
-fi
-eval set -- "$OPTS"
+    while [[ $# -gt 0 && $1 != -* && $1 != template ]]; do
+        case "$1" in
+            -c|--clone)
+                clone="y"
+                shift
+                ;;
+            -N|--new-template)
+                new_template_name="$2"
+                shift 2
+                ;;
+            --)
+                shift
+                break
+                ;;
+            *)
+                echo "Unknown option: $1" >&2
+                usage
+                exit 1
+                ;;
+        esac
+    done
 
-# Process options
-while true; do
-    case "$1" in
-        -h|--help)
-            usage
-            exit 0
-            ;;
-        -c|--clone)
-            clone="y"
-            shift
-            ;;
-        -N|--new-template)
-            new_template_name="$2"
-            shift 2
-            ;;
-        --)
-            shift
-            break
-            ;;
-        *)
-            echo "Unknown option: $1" >&2
-            usage
-            exit 1
-            ;;
-    esac
+    templates["$template"]=$template
+    clones["$template"]=$clone
+    new_template_names["$template"]=$new_template_name
 done
 
 message() {
@@ -112,69 +108,6 @@ handle_error() {
 }
 
 trap 'handle_error' ERR
-
-# Progress bar function
-progress_bar() {
-    local total=$1
-    local current=$2
-    local width=50
-    local progress=$((width * current / total))
-    printf "["
-    for ((i = 0; i < progress; i++)); do printf "="; done
-    for ((i = progress; i < width; i++)); do printf " "; done
-    printf "] %d%%\r" $((100 * current / total))
-}
-
-# Function to monitor and display progress for apt upgrade
-apt_upgrade_with_progress() {
-    local template=$1
-    qvm-run -u root "$template" "DEBIAN_FRONTEND=noninteractive apt update"
-    local total_steps=3
-    local current_step=0
-    current_step=$((current_step + 1))
-    progress_bar $total_steps $current_step
-    sleep 1
-
-    qvm-run -u root "$template" "DEBIAN_FRONTEND=noninteractive apt full-upgrade -y" | (
-        while read -r line; do
-            if [[ "$line" =~ ([0-9]+)% ]]; then
-                percentage=${BASH_REMATCH[1]}
-                progress_bar 100 $percentage
-            fi
-        done
-    )
-    current_step=$((current_step + 1))
-    progress_bar $total_steps $current_step
-    sleep 1
-
-    qvm-run -u root "$template" "apt autoremove -y && apt clean"
-    current_step=$((current_step + 1))
-    progress_bar $total_steps $current_step
-    echo ""
-}
-
-# Function to monitor and display progress for dnf upgrade
-dnf_upgrade_with_progress() {
-    local template=$1
-    qvm-run -u root "$template" "dnf clean all"
-    local total_steps=2
-    local current_step=0
-    current_step=$((current_step + 1))
-    progress_bar $total_steps $current_step
-    sleep 1
-
-    qvm-run -u root "$template" "dnf --refresh upgrade -y" | (
-        while read -r line; do
-            if [[ "$line" =~ ([0-9]+)% ]]; then
-                percentage=${BASH_REMATCH[1]}
-                progress_bar 100 $percentage
-            fi
-        done
-    )
-    current_step=$((current_step + 1))
-    progress_bar $total_steps $current_step
-    echo ""
-}
 
 get_template_type() {
     local template=$1
@@ -225,11 +158,10 @@ upgrade_debian_template() {
     local old_name=$4
     local new_name=$5
 
-    if [[ "$clone" == "y" ]]; then
-        if qvm-ls | grep -qw "$new_template_name"; then
-            message "Error: VM $new_template_name already exists. Exiting."
-            exit 1
-        fi
+    if [[ "$clone" == "y" && -z "$new_template_name" ]]; then
+        message "Error: New template name required when cloning."
+        exit 1
+    elif [[ "$clone" == "y" ]]; then
         message "Cloning $template to $new_template_name..."
         if ! qvm-clone "$template" "$new_template_name"; then
             message "Failed to clone template. Exiting."
@@ -238,14 +170,15 @@ upgrade_debian_template() {
         template="$new_template_name"
     fi
 
-    message "Upgrading $template from $old_name to $new_name..."
+    message "Upgrading $template from $old_name to $new_name. Patience..."
     qvm-start --skip-if-running "$template"
 
     message "Updating APT repositories..."
     qvm-run -u root "$template" "sed -i 's/$old_name/$new_name/g' /etc/apt/sources.list /etc/apt/sources.list.d/*.list"
-
-    message "Performing upgrade..."
-    apt_upgrade_with_progress "$template"
+    qvm-run -u root "$template" "if ls /etc/apt/sources.list.d/*.sources 1> /dev/null 2>&1; then sed -i 's/$old_name/$new_name/g' /etc/apt/sources.list.d/*.sources; fi"
+   
+    message "Performing upgrade. Patience..."
+    qvm-run -p -u root "$template" "DEBIAN_FRONTEND=noninteractive apt update && DEBIAN_FRONTEND=noninteractive apt -o Dpkg::Options::='--force-confnew' full-upgrade -y && DEBIAN_FRONTEND=noninteractive apt autoremove -y && apt clean"
 
     message "Trimming the new template..."
     qvm-run -u root "$template" "fstrim -av"
@@ -264,25 +197,16 @@ upgrade_fedora_template() {
     local new_num=$((current_num + 1))
 
     if [[ $clone == "y" ]]; then
-        if qvm-ls | grep -qw "$new_template_name"; then
-            message "Error: VM $new_template_name already exists. Exiting."
-            exit 1
-        fi
         message "Cloning $template to $new_template_name..."
-        if ! qvm-clone "$template" "$new_template_name"; then
-            message "Failed to clone template. Exiting."
-            exit 1
-        fi
+        qvm-clone "$template" "$new_template_name"
         template="$new_template_name"
     else
         new_template_name="$template"
     fi
 
-    message "Performing upgrade..."
+    message "Upgrading Fedora $current_num to Fedora $new_num. Patience..."
     qvm-start --skip-if-running "$template"
-
-    message "Starting upgrade in $template..."
-    dnf_upgrade_with_progress "$template"
+    qvm-run -p -u root "$template" "dnf clean all && dnf --releasever=$new_num distro-sync --best --allowerasing -y && dnf update -y && dnf upgrade -y"
 
     message "Shutting down $template..."
     qvm-shutdown --wait "$template"
@@ -290,36 +214,50 @@ upgrade_fedora_template() {
     message "Upgrade completed successfully for $template."
 }
 
-message "Determining template type and version..."
-template_type=$(get_template_type "$template")
-template_version=$(get_template_version "$template")
+change_qvm_features() {
+    qvm-run -u root "$template" 'qvm-features-request --commit'
+}
 
-message "Template type: $template_type"
-message "Template version: $template_version"
-
-if [[ -z "$template_type" || "$template_type" == "unknown" ]]; then
-    echo "Error: Could not determine template type for $template." >&2
+if ! type qvm-ls >/dev/null 2>&1; then
+    echo "This script is intended to run in a Qubes OS environment." >&2
     exit 1
 fi
 
-if [[ -z "$template_version" || "$template_version" == "unknown" ]]; then
-    echo "Error: Could not determine template version for $template." >&2
-    exit 1
-fi
+for template in "${!templates[@]}"; do
+    clone="${clones[$template]}"
+    new_template_name="${new_template_names[$template]}"
 
-if [[ "$template_type" == "debian" ]]; then
-    new_name=$(next_debian_version "$template_version")
-    if [[ "$new_name" == "unknown" ]]; then
-        echo "Error: Unknown Debian version." >&2
+    message "Determining template type and version for $template..."
+    template_type=$(get_template_type "$template")
+    template_version=$(get_template_version "$template")
+
+    message "Template type: $template_type"
+    message "Template version: $template_version"
+
+    if [[ -z "$template_type" || "$template_type" == "unknown" ]]; then
+        echo "Error: Could not determine template type for $template." >&2
         exit 1
     fi
-    upgrade_debian_template "$template" "$clone" "$new_template_name" "$template_version" "$new_name"
-    change_qvm_features "$template" "$new_template_name"
-elif [[ "$template_type" == "fedora" ]]; then
-    upgrade_fedora_template "$template" "$clone" "$new_template_name" "$template_version"
-    change_qvm_features "$template" "$new_template_name"
-else
-    echo "Error: Unsupported template type. Use 'debian' or 'fedora'." >&2
-    usage
-    exit 1
-fi
+
+    if [[ -z "$template_version" || "$template_version" == "unknown" ]]; then
+        echo "Error: Could not determine template version for $template." >&2
+        exit 1
+    fi
+
+    if [[ "$template_type" == "debian" ]]; then
+        new_name=$(next_debian_version "$template_version")
+        if [[ "$new_name" == "unknown" ]]; then
+            echo "Error: Unknown Debian version." >&2
+            exit 1
+        fi
+        upgrade_debian_template "$template" "$clone" "$new_template_name" "$template_version" "$new_name"
+        change_qvm_features "$template" "$new_template_name"
+    elif [[ "$template_type" == "fedora" ]]; then
+        upgrade_fedora_template "$template" "$clone" "$new_template_name" "$template_version"
+        change_qvm_features "$template" "$new_template_name"
+    else
+        echo "Error: Unsupported template type for $template. Use 'debian' or 'fedora'." >&2
+        usage
+        exit 1
+    fi
+done
