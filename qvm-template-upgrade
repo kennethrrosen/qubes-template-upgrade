@@ -161,6 +161,9 @@ upgrade_debian_template() {
     local new_template_name=$3
     local old_name=$4
     local new_name=$5
+    local max_retries=3
+    local retry_count=0
+    local success=false
 
     if [[ "$clone" == "y" && -z "$new_template_name" ]]; then
         message "Error: New template name required when cloning."
@@ -181,8 +184,20 @@ upgrade_debian_template() {
     qvm-run -u root "$template" "sed -i 's/$old_name/$new_name/g' /etc/apt/sources.list /etc/apt/sources.list.d/*.list"
     qvm-run -u root "$template" "if ls /etc/apt/sources.list.d/*.sources 1> /dev/null 2>&1; then sed -i 's/$old_name/$new_name/g' /etc/apt/sources.list.d/*.sources; fi"
    
-    message "Performing upgrade. Patience..."
-    qvm-run -p -u root "$template" "DEBIAN_FRONTEND=noninteractive apt update && DEBIAN_FRONTEND=noninteractive apt -o Dpkg::Options::='--force-confnew' full-upgrade -y && DEBIAN_FRONTEND=noninteractive apt autoremove -y && apt clean"
+    while [ $retry_count -lt $max_retries ]; do
+        if qvm-run -u root "$template" "DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::='--force-confnew' --fix-missing full-upgrade -y && DEBIAN_FRONTEND=noninteractive apt-get autoremove -y && apt-get clean"; then
+            success=true
+            break
+        else
+            retry_count=$((retry_count + 1))
+            message "Attempt $retry_count failed. Retrying..."
+        fi
+    done
+
+    if [ "$success" = false ]; then
+        message "Upgrade failed after $max_retries attempts. Exiting."
+        exit 1
+    fi
 
     message "Trimming the new template..."
     qvm-run -u root "$template" "fstrim -av"
