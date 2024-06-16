@@ -206,6 +206,7 @@ upgrade_debian_template() {
     qvm-run -u root "$template" "fstrim -av"
 
     message "Shutting down $template..."
+    change_qvm_features "$template"
     qvm-shutdown --wait "$template"
 
     message "Upgrade to $new_name completed successfully for $template."
@@ -231,12 +232,14 @@ upgrade_fedora_template() {
     qvm-run -p -u root "$template" "dnf clean all && dnf --releasever=$new_num distro-sync --best --allowerasing -y && dnf update -y && dnf upgrade -y" & spinner
 
     message "Shutting down $template..."
+    change_qvm_features "$template"
     qvm-shutdown --wait "$template"
 
     message "Upgrade completed successfully for $template."
 }
 
 change_qvm_features() {
+    local template=$1
     qvm-run -u root "$template" 'qvm-features-request --commit'
 }
 
