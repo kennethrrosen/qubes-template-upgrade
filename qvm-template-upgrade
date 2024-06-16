@@ -185,7 +185,7 @@ upgrade_debian_template() {
     qvm-run -u root "$template" "if ls /etc/apt/sources.list.d/*.sources 1> /dev/null 2>&1; then sed -i 's/$old_name/$new_name/g' /etc/apt/sources.list.d/*.sources; fi"
    
     while [ $retry_count -lt $max_retries ]; do
-        if qvm-run -u root "$template" "DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::='--force-confnew' --fix-missing full-upgrade -y && DEBIAN_FRONTEND=noninteractive apt-get autoremove -y && apt-get clean"; then
+        if qvm-run -p -u root "$template" "DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::='--force-confnew' --fix-missing full-upgrade -y && DEBIAN_FRONTEND=noninteractive apt-get autoremove -y && apt-get clean"; then
             success=true
             break
         else
@@ -231,7 +231,7 @@ upgrade_fedora_template() {
     qvm-start --skip-if-running "$template"
     
     while [ $retry_count -lt $max_retries ]; do
-        if qvm-run -u root "$template" "dnf clean all && dnf --releasever=$new_num distro-sync --best --allowerasing -y && dnf update -y && dnf upgrade -y"; then
+        if qvm-run -p -u root "$template" "dnf clean all && dnf --releasever=$new_num distro-sync --best --allowerasing -y && dnf update -y && dnf upgrade -y"; then
             success=true
             break
         else
