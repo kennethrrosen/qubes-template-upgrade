@@ -174,7 +174,7 @@ upgrade_debian_template() {
         template="$new_template_name"
     fi
 
-    message "Upgrading $template from $old_name to $new_name..."
+    message "Upgrading $template from $old_name to $new_name. Patience..."
     qvm-start --skip-if-running "$template"
 
     message "Updating APT repositories..."
@@ -208,7 +208,7 @@ upgrade_fedora_template() {
         new_template_name="$template"
     fi
 
-    message "Performing upgrade. Patience..."
+    message "Upgrading Fedora $current_num to Fedora $new_num. Patience..."
     qvm-start --skip-if-running "$template"
     qvm-run -p -u root "$template" "dnf clean all && dnf --releasever=$new_num distro-sync --best --allowerasing -y && dnf update -y && dnf upgrade -y"
 
