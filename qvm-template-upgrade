@@ -286,10 +286,8 @@ if [[ "$template_type" == "debian" ]]; then
         exit 1
     fi
     upgrade_debian_template "$template" "$clone" "$new_template_name" "$template_version" "$new_name"
-    change_qvm_features "$template" "$new_template_name"
 elif [[ "$template_type" == "fedora" ]]; then
     upgrade_fedora_template "$template" "$clone" "$new_template_name" "$template_version"
-    change_qvm_features "$template" "$new_template_name"
 else
     echo "Error: Unsupported template type. Use 'debian' or 'fedora'." >&2
     usage
