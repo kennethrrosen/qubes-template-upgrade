@@ -144,14 +144,22 @@ spinner() {
     local pid=$!
     local delay=0.1
     local spinstr='|/-\'
+    local total_duration=300  # Estimated total duration in seconds (5 minutes)
+    local start_time=$(date +%s)
+
     while [ "$(ps a | awk '{print $1}' | grep -w $pid)" ]; do
         local temp=${spinstr#?}
-        printf " [%c]  " "$spinstr"
         local spinstr=$temp${spinstr%"$temp"}
+        local now=$(date +%s)
+        local elapsed_time=$((now - start_time))
+        local remaining_time=$((total_duration - elapsed_time))
+        local eta=$(date -u -d @${remaining_time} +%H:%M:%S)
+        
+        printf " [%c]  ETA: %s\r" "$spinstr" "$eta"
+        
         sleep $delay
-        printf "\b\b\b\b\b\b"
     done
-    printf "    \b\b\b\b"
+    printf "    \b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b"
 }
 
 next_debian_version() {
