@@ -178,8 +178,9 @@ upgrade_debian_template() {
     qvm-start --skip-if-running "$template"
 
     message "Updating APT repositories..."
-qvm-run -u root "$template" "sed -i 's/$old_name/$new_name/g' /etc/apt/sources.list /etc/apt/sources.list.d/*.list"
+    qvm-run -u root "$template" "sed -i 's/$old_name/$new_name/g' /etc/apt/sources.list /etc/apt/sources.list.d/*.list"
     qvm-run -u root "$template" "sed -i 's/$old_name/$new_name/g' /etc/apt/sources.list /etc/apt/sources.list.d/*.sources"
+   
     message "Performing upgrade. Patience..."
     qvm-run -p -u root "$template" "apt update && apt full-upgrade -y && apt autoremove -y && apt clean"
 
