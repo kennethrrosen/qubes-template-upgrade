@@ -219,7 +219,7 @@ upgrade_fedora_template() {
 }
 
 change_qvm_features() {
-    qvm-run -u root "$template" qubes.PostInstall
+    qvm-run -u root "$template" 'qvm-features-request --commit'
 }
 
 if ! type qvm-ls >/dev/null 2>&1; then
