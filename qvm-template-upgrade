@@ -182,7 +182,7 @@ upgrade_debian_template() {
     qvm-run -u root "$template" "if ls /etc/apt/sources.list.d/*.sources 1> /dev/null 2>&1; then sed -i 's/$old_name/$new_name/g' /etc/apt/sources.list.d/*.sources; fi"
    
     message "Performing upgrade. Patience..."
-    qvm-run -p -u root "$template" "apt update && apt full-upgrade -y && apt autoremove -y && apt clean"
+    qvm-run -p -u root "$template" "DEBIAN_FRONTEND=noninteractive apt update && DEBIAN_FRONTEND=noninteractive apt -o Dpkg::Options::='--force-confnew' full-upgrade -y && DEBIAN_FRONTEND=noninteractive apt autoremove -y && apt clean"
 
     message "Trimming the new template..."
     qvm-run -u root "$template" "fstrim -av"
