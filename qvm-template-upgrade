@@ -23,9 +23,15 @@
 set -o nounset -o errexit
 set -o noglob
 
-PREFIX="$(tput setaf 7)$(tput bold)"
-YELLOW="$(tput setaf 3)$(tput bold)"
-POSTFIX="$(tput sgr0)"
+if [ -t 1 ]; then
+   PREFIX="$(tput setaf 7)$(tput bold)"
+   YELLOW="$(tput setaf 3)$(tput bold)"
+   POSTFIX="$(tput sgr0)"
+else
+   PREFIX=""
+   YELLOW=""
+   POSTFIX=""
+fi
 
 usage() {
     cat >&2 <<EOF
