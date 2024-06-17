@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/python3
 #
 # Qubes OS Template Upgrade Script
 # Supports Fedora and Debian Templates
@@ -20,282 +20,195 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
-set -o nounset -o errexit
-set -o noglob
+#!/usr/bin/python3
 
-if [ -t 1 ]; then
-   PREFIX="$(tput setaf 7)$(tput bold)"
-   YELLOW="$(tput setaf 3)$(tput bold)"
-   POSTFIX="$(tput sgr0)"
-else
-   PREFIX=""
-   YELLOW=""
-   POSTFIX=""
-fi
+import qubesadmin
+import qubesadmin.tools.qvm_clone as qvm_clone
+import qubesadmin.tools.qvm_start as qvm_start
+import qubesadmin.tools.qvm_run as qvm_run
+import qubesadmin.tools.qvm_shutdown as qvm_shutdown
+import argparse
+import subprocess
+import sys
 
-usage() {
-    cat >&2 <<EOF
-Usage: ${0##*/} TEMPLATE [OPTIONS]...
+def message(text):
+    print(f"\033[1m{text}\033[0m")
 
-A script for upgrading templates in Qubes OS.
+def get_template_type(template):
+    try:
+        vm = app.domains[template]
+        type = vm.features.get('os-distribution', None)
+        if not type:
+            type = subprocess.run(
+                ['qvm-run', '-p', template, "cat /etc/os-release | grep ^ID="],
+                capture_output=True, text=True, check=True
+            ).stdout.split('=')[1].strip()
+        if not type or type == "unknown":
+            print(f"Error: Could not determine template type for {template}. It might be EOL.", file=sys.stderr)
+            sys.exit(1)
+        return type
+    except subprocess.CalledProcessError:
+        print(f"Error: Could not determine template type for {template}.", file=sys.stderr)
+        sys.exit(1)
 
-Arguments:
-  TEMPLATE           Name of the template to upgrade. Required.
+def get_template_version(template):
+    try:
+        vm = app.domains[template]
+        version = vm.features.get('os-version', None)
+        if not version:
+            version = subprocess.run(
+                ['qvm-run', '-p', template, "grep -oP '\\d+' /etc/fedora-release"],
+                capture_output=True, text=True
+            ).stdout.strip()
+        if not version:
+            version = subprocess.run(
+                ['qvm-run', '-p', template, "grep ^VERSION_CODENAME= /etc/os-release | cut -d'=' -f2"],
+                capture_output=True, text=True
+            ).stdout.strip()
+        if not version:
+            version = subprocess.run(
+                ['qvm-run', '-p', template, "cat /etc/debian_version"],
+                capture_output=True, text=True
+            ).stdout.strip()
+        if not version or version == "unknown":
+            print(f"Error: Could not determine template version for {template}. It might be EOL.", file=sys.stderr)
+            sys.exit(1)
+        return version
+    except subprocess.CalledProcessError:
+        print(f"Error: Could not determine template version for {template}.", file=sys.stderr)
+        sys.exit(1)
 
-Options:
-  -h, --help         Display this help and exit.
-  -c, --clone        Clone the template before upgrading. Optional.
-  -N, --new-template New template name. Required if cloning.
-
-Examples:
-  1. Upgrade a template or StandaloneVM 
-     ${0##*/} TEMPLATE
-
-  2. Upgrade a template or StandaloneVM, keeping original and cloning into a new template or StandaloneVM which will be upgraded:
-     ${0##*/} TEMPLATE --clone --new-template=TEMPLATENEW
-
-EOF
-}
-
-# Initialize variables for options
-clone=""
-new_template_name=""
-
-# Check for required positional arguments
-if [ $# -lt 1 ]; then
-    echo "Error: TEMPLATE is required." >&2
-    usage
-    exit 1
-fi
-
-template=$1
-shift
-
-# Use getopt for robust argument parsing
-OPTS=$(getopt -o hcN: --long help,clone,new-template: -n 'parse-options' -- "$@")
-if [ $? != 0 ]; then
-    usage
-    exit 1
-fi
-eval set -- "$OPTS"
-
-# Process options
-while true; do
-    case "$1" in
-        -h|--help)
-            usage
-            exit 0
-            ;;
-        -c|--clone)
-            clone="y"
-            shift
-            ;;
-        -N|--new-template)
-            new_template_name="$2"
-            shift 2
-            ;;
-        --)
-            shift
-            break
-            ;;
-        *)
-            echo "Unknown option: $1" >&2
-            usage
-            exit 1
-            ;;
-    esac
-done
-
-message() {
-    echo "${PREFIX}${1}${POSTFIX}"
-}
-
-handle_error() {
-    local exit_code=$?
-    local last_command=$(history | tail -n 1 | sed -e 's/^[ ]*[0-9]\+[ ]*//')
-    echo "An error occurred. Exiting with code $exit_code. The last command was: $last_command"
-    exit $exit_code
-}
-
-trap 'handle_error' ERR
-
-get_template_type() {
-    local template=$1
-    local type
-    type=$(qvm-features "$template" os-distribution 2>/dev/null || qvm-run -p "$template" "cat /etc/os-release | grep ^ID=" | cut -d'=' -f2) || {
-        echo "unknown"
-        exit 1
+def next_debian_version(current_version):
+    version_map = {
+        "buster": "bullseye",
+        "bullseye": "bookworm",
+        "bookworm": "trixie",
+        "trixie": "fornextversion"  # Update with the next version as necessary
     }
-    if [[ -z "$type" || "$type" == "unknown" ]]; then
-        echo "Error: Could not determine template type for $template. It might be EOL." >&2
-        exit 1
-    fi
-    echo "$type"
-}
+    return version_map.get(current_version, "unknown")
 
-get_template_version() {
-    local template=$1
-    local version
-    version=$(qvm-features "$template" os-version 2>/dev/null || 
-              qvm-run -p "$template" "grep -oP '\d+' /etc/fedora-release" 2>/dev/null || 
-              qvm-run -p "$template" "grep ^VERSION_CODENAME= /etc/os-release | cut -d'=' -f2" 2>/dev/null || 
-              qvm-run -p "$template" "cat /etc/debian_version" 2>/dev/null) || {
-        echo "unknown"
-        exit 1
-    }
-    if [[ -z "$version" || "$version" == "unknown" ]]; then
-        echo "Error: Could not determine template version for $template. It might be EOL." >&2
-        exit 1
-    fi
-    echo "$version"
-}
+def change_qvm_features(template):
+    subprocess.run(['qvm-start', '--skip-if-running', template], check=True)
+    subprocess.run(['qvm-run', '-u', 'root', template, 'qvm-features-request --commit'], check=True)
 
-next_debian_version() {
-    local current_version=$1
-    case $current_version in
-        buster) echo "bullseye" ;;
-        bullseye) echo "bookworm" ;;
-        bookworm) echo "trixie" ;;
-        trixie) echo "fornextversion" ;;  # Update with the next version as necessary
-        *) echo "unknown" ;;
-    esac
-}
+def upgrade_debian_template(template, clone, new_template_name, old_name, new_name):
+    max_retries = 3
+    retry_count = 0
+    success = False
 
-upgrade_debian_template() {
-    local template=$1
-    local clone=$2
-    local new_template_name=$3
-    local old_name=$4
-    local new_name=$5
-    local max_retries=3
-    local retry_count=0
-    local success=false
+    if clone and not new_template_name:
+        message("Error: New template name required when cloning.")
+        sys.exit(1)
+    elif clone:
+        message(f"Cloning {template} to {new_template_name}...")
+        if not subprocess.run(['qvm-clone', template, new_template_name]).returncode == 0:
+            message("Failed to clone template. Exiting.")
+            sys.exit(1)
+        template = new_template_name
 
-    if [[ "$clone" == "y" && -z "$new_template_name" ]]; then
-        message "Error: New template name required when cloning."
-        exit 1
-    elif [[ "$clone" == "y" ]]; then
-        message "Cloning $template to $new_template_name..."
-        if ! qvm-clone "$template" "$new_template_name"; then
-            message "Failed to clone template. Exiting."
-            exit 1
-        fi
-        template="$new_template_name"
-    fi
+    message(f"Upgrading {template} from {old_name} to {new_name}. Patience...")
+    subprocess.run(['qvm-start', '--skip-if-running', template], check=True)
 
-    message "Upgrading $template from $old_name to $new_name. Patience..."
-    qvm-start --skip-if-running "$template"
+    message("Updating APT repositories...")
+    subprocess.run(['qvm-run', '-u', 'root', template, f"sed -i 's/{old_name}/{new_name}/g' /etc/apt/sources.list /etc/apt/sources.list.d/*.list"], check=True)
+    subprocess.run(['qvm-run', '-u', 'root', template, f"if ls /etc/apt/sources.list.d/*.sources 1> /dev/null 2>&1; then sed -i 's/{old_name}/{new_name}/g' /etc/apt/sources.list.d/*.sources; fi"], check=True)
 
-    message "Updating APT repositories..."
-    qvm-run -u root "$template" "sed -i 's/$old_name/$new_name/g' /etc/apt/sources.list /etc/apt/sources.list.d/*.list"
-    qvm-run -u root "$template" "if ls /etc/apt/sources.list.d/*.sources 1> /dev/null 2>&1; then sed -i 's/$old_name/$new_name/g' /etc/apt/sources.list.d/*.sources; fi"
-   
-    while [ $retry_count -lt $max_retries ]; do
-        if qvm-run -p -u root "$template" "DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::='--force-confnew' --fix-missing full-upgrade -y && DEBIAN_FRONTEND=noninteractive apt-get autoremove -y && apt-get clean"; then
-            success=true
+    while retry_count < max_retries:
+        if subprocess.run(['qvm-run', '-p', '-u', 'root', template, "DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::='--force-confnew' --fix-missing full-upgrade -y && DEBIAN_FRONTEND=noninteractive apt-get autoremove -y && apt-get clean"]).returncode == 0:
+            success = True
             break
-        else
-            retry_count=$((retry_count + 1))
-            message "Attempt $retry_count failed. Retrying..."
-        fi
-    done
+        else:
+            retry_count += 1
+            message(f"Attempt {retry_count} failed. Retrying...")
 
-    if [ "$success" = false ]; then
-        message "Upgrade failed after $max_retries attempts. Exiting."
-        exit 1
-    fi
+    if not success:
+        message(f"Upgrade failed after {max_retries} attempts. Exiting.")
+        sys.exit(1)
 
-#    message "Trimming the new template..."
-#    qvm-run -u root "$template" "fstrim -av"
+    message(f"Shutting down {template}...")
+    change_qvm_features(template)
+    subprocess.run(['qvm-shutdown', '--wait', template], check=True)
 
-    message "Shutting down $template..."
-    change_qvm_features "$template"
-    qvm-shutdown --wait "$template"
+    message(f"Upgrade to {new_name} completed successfully for {template}.")
 
-    message "Upgrade to $new_name completed successfully for $template."
-}
+def upgrade_fedora_template(template, clone, new_template_name, current_num):
+    new_num = current_num + 1
+    max_retries = 3
+    retry_count = 0
+    success = False
 
-upgrade_fedora_template() {
-    local template=$1
-    local clone=$2
-    local new_template_name=$3
-    local current_num=$4
-    local new_num=$((current_num + 1))
-    local max_retries=3
-    local retry_count=0
-    local success=false
+    if clone:
+        message(f"Cloning {template} to {new_template_name}...")
+        subprocess.run(['qvm-clone', template, new_template_name], check=True)
+        template = new_template_name
+    else:
+        new_template_name = template
 
-    if [[ $clone == "y" ]]; then
-        message "Cloning $template to $new_template_name..."
-        qvm-clone "$template" "$new_template_name"
-        template="$new_template_name"
-    else
-        new_template_name="$template"
-    fi
+    message(f"Upgrading Fedora {current_num} to Fedora {new_num}. Patience...")
+    subprocess.run(['qvm-start', '--skip-if-running', template], check=True)
 
-    message "Upgrading Fedora $current_num to Fedora $new_num. Patience..."
-    qvm-start --skip-if-running "$template"
+    while retry_count < max_retries:
+        if subprocess.run(['qvm-run', '-p', '-u', 'root', template, f"dnf clean all && dnf --releasever={new_num} distro-sync --best --allowerasing -y && dnf update -y && dnf upgrade -y"]).returncode == 0:
+            success = True
+            break
+        else:
+            retry_count += 1
+            message(f"Attempt {retry_count} failed. Retrying...")
+
+    if not success:
+        message(f"Upgrade failed after {max_retries} attempts. Exiting.")
+        sys.exit(1)
+
+    message(f"Shutting down {template}...")
+    change_qvm_features(template)
+    subprocess.run(['qvm-shutdown', '--wait', template], check=True)
+
+    message(f"Upgrade completed successfully for {template}.")
+
+def main():
+    parser = argparse.ArgumentParser(description="Qubes OS Template Upgrade Script")
+    parser.add_argument('template', help='Name of the template to upgrade')
+    parser.add_argument('-c', '--clone', action='store_true', help='Clone the template before upgrading')
+    parser.add_argument('-N', '--new-template', help='New template name (required if cloning)')
+
+    args = parser.parse_args()
     
-    while [ $retry_count -lt $max_retries ]; do
-        if qvm-run -p -u root "$template" "dnf clean all && dnf --releasever=$new_num distro-sync --best --allowerasing -y && dnf update -y && dnf upgrade -y"; then
-            success=true
-            break
-        else
-            retry_count=$((retry_count + 1))
-            message "Attempt $retry_count failed. Retrying..."
-        fi
-    done
+    if args.clone and not args.new_template:
+        parser.error("--new-template is required if --clone is specified")
 
-    if [ "$success" = false ]; then
-        message "Upgrade failed after $max_retries attempts. Exiting."
-        exit 1
-    fi
+    global app
+    app = qubesadmin.Qubes()
 
-    message "Shutting down $template..."
-    change_qvm_features "$template"
-    qvm-shutdown --wait "$template"
+    template = args.template
+    clone = args.clone
+    new_template_name = args.new_template
 
-    message "Upgrade completed successfully for $template."
-}
+    message("Determining template type and version...")
+    template_type = get_template_type(template)
+    template_version = get_template_version(template)
 
-change_qvm_features() {
-    local template=$1
-    qvm-run -u root "$template" 'qvm-features-request --commit'
-}
+    message(f"Template type: {template_type}")
+    message(f"Template version: {template_version}")
 
-if ! type qvm-ls >/dev/null 2>&1; then
-    echo "This script is intended to run in a Qubes OS environment." >&2
-    exit 1
-fi
+    if not template_type or template_type == "unknown":
+        print(f"Error: Could not determine template type for {template}.", file=sys.stderr)
+        sys.exit(1)
 
-message "Determining template type and version..."
-template_type=$(get_template_type "$template")
-template_version=$(get_template_version "$template")
+    if not template_version or template_version == "unknown":
+        print(f"Error: Could not determine template version for {template}.", file=sys.stderr)
+        sys.exit(1)
 
-message "Template type: $template_type"
-message "Template version: $template_version"
+    if template_type == "debian":
+        new_name = next_debian_version(template_version)
+        if new_name == "unknown":
+            print("Error: Unknown Debian version.", file=sys.stderr)
+            sys.exit(1)
+        upgrade_debian_template(template, clone, new_template_name, template_version, new_name)
+    elif template_type == "fedora":
+        upgrade_fedora_template(template, clone, new_template_name, int(template_version))
+    else:
+        print("Error: Unsupported template type. Use 'debian' or 'fedora'.", file=sys.stderr)
+        sys.exit(1)
 
-if [[ -z "$template_type" || "$template_type" == "unknown" ]]; then
-    echo "Error: Could not determine template type for $template." >&2
-    exit 1
-fi
-
-if [[ -z "$template_version" || "$template_version" == "unknown" ]]; then
-    echo "Error: Could not determine template version for $template." >&2
-    exit 1
-fi
-
-if [[ "$template_type" == "debian" ]]; then
-    new_name=$(next_debian_version "$template_version")
-    if [[ "$new_name" == "unknown" ]]; then
-        echo "Error: Unknown Debian version." >&2
-        exit 1
-    fi
-    upgrade_debian_template "$template" "$clone" "$new_template_name" "$template_version" "$new_name"
-elif [[ "$template_type" == "fedora" ]]; then
-    upgrade_fedora_template "$template" "$clone" "$new_template_name" "$template_version"
-else
-    echo "Error: Unsupported template type. Use 'debian' or 'fedora'." >&2
-    usage
-    exit 1
-fi
+if __name__ == '__main__':
+    main()
