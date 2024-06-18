@@ -19,10 +19,12 @@ This tool provides a GUI and CLI for upgrading Fedora and Debian templates in Qu
 %install
 install -m 755 qubes-template-upgrade-gui %{buildroot}/bin/
 install -m 755 qvm-template-upgrade %{buildroot}/bin/
+innstall qubes-template-upgrade-gui.desktop  %{buildroot}/usr/share/applications/
 
 %files
 /usr/bin/qubes-template-upgrade-gui
 /usr/bin/qvm-template-upgrade
+/usr/share/applications/qubes-template-upgrade-gui.desktop
 
 %changelog
 * Tue Jun 18 2024 Kenneth R. Rosen <kennethrrosen@proton.me> - 1.0.0-1
