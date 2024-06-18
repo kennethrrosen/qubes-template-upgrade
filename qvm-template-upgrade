@@ -20,8 +20,6 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
-#!/usr/bin/python3
-
 import qubesadmin
 import qubesadmin.tools.qvm_clone as qvm_clone
 import qubesadmin.tools.qvm_start as qvm_start
